@@ -33,7 +33,7 @@ export type MapStateToProps = (_store: any) => any;
 
 export type Action = { type: string; [props: string]: any };
 
-export type UseConnectType = [state: any, dispatch: (action: Action) => void];
+export type UseConnectType = [any, (action: Action) => void];
 
 export interface ConnectConfigProps {
     withRef: boolean;
@@ -272,7 +272,9 @@ function GeneratorExec(promiseValue?: any, manualValue?: any) {
     }
     if (value instanceof Promise) {
         value.then(GeneratorExecBinder).catch((error) => {
-            GeneratorExecBinder({ error, data: { success: false } });
+            GeneratorExecBinder(undefined, this.generator.throw(new Error(error)));
+            //临时保留不拋异常，继续往下执行的逻辑-勿删
+            // GeneratorExecBinder({ error, data: { success: false } });
         });
         return;
     }
