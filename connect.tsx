@@ -4,6 +4,8 @@ const models: { [namespace: string]: Model } = {};
 
 const dispatchs: { [uniqueId: string]: any } = {};
 
+const stateToProps: { [uniqueId: string]: any } = {};
+
 const suspendedGenerators: { [namespace: string]: { [actionType: string]: Generator } } = {};
 
 const takeGeneratorsBinders: { [namespace: string]: { [actionType: string]: Function } } = {};
@@ -20,7 +22,7 @@ export interface Model {
     namespace: string;
     state: any;
     reducers: {
-        [props: string]: (state: object, dispatchState: object) => object;
+        [props: string]: (state: { [key: string]: any }, dispatchState: { [key: string]: any }) => object;
     };
     effects?: {
         [props: string]: [(dispatchState: any, async: Async) => any, TakeType] | ((dispatchState: any, async: Async) => any);
@@ -46,12 +48,13 @@ const reducer: React.Reducer<any, Action> = () => {
 function generateId(): string {
     return Math.random().toString(16) + (+new Date()).toString(16);
 }
-function dispatchStore(namespaces: string[], dispatchId: React.MutableRefObject<string>, dispatch: Function) {
+function dispatchStore(namespaces: string[], dispatchId: React.MutableRefObject<string>, dispatch: Function, mapStateToProps: Function) {
     if (!dispatchId.current) {
         dispatchId.current = generateId();
         namespaces.forEach((namespace: string) => {
-            !dispatchs[namespace] && (dispatchs[namespace] = {});
+            !dispatchs[namespace] && ((dispatchs[namespace] = {}), (stateToProps[namespace] = {}));
             dispatchs[namespace][dispatchId.current] = dispatch;
+            stateToProps[namespace][dispatchId.current] = mapStateToProps;
         });
     }
 }
@@ -77,7 +80,7 @@ function useConnect(mapStateToProps: MapStateToProps, namespaces: string[]): Use
     const [state, dispatch] = React.useReducer(reducer, store);
     const dispatchId = React.useRef('');
 
-    dispatchStore(namespaces, dispatchId, dispatch);
+    dispatchStore(namespaces, dispatchId, dispatch, mapStateToProps);
     React.useEffect(dispatchEffect.bind({ namespaces, dispatchId: dispatchId.current }), []);
     const mapState = mapStateToProps(state);
 
@@ -107,7 +110,7 @@ function connect(mapStateToProps: MapStateToProps, namespaces: string[], config?
             const dispatchId = React.useRef('');
             const [state, dispatch] = React.useReducer(reducer, store);
 
-            dispatchStore(namespaces, dispatchId, dispatch);
+            dispatchStore(namespaces, dispatchId, dispatch, mapStateToProps);
             React.useEffect(dispatchEffect.bind({ namespaces, dispatchId: dispatchId.current }), []);
 
             const mapState = mapStateToProps(store);
@@ -139,7 +142,7 @@ connect.model = function (model: Model) {
         return;
     }
     //初始化model数据
-    store[model.namespace] = model.state;
+    store[model.namespace] = model.state || {};
 
     //初始化model
     models[model.namespace] = model;
@@ -237,14 +240,20 @@ connect.dispatch = function (action: Action) {
     if (!reducer || typeof reducer !== 'function') {
         return;
     }
-
-    const reducerState = reducer(store[namespace], state);
+    const oldState = store[namespace];
+    const reducerState = reducer(oldState, state) as any;
 
     //如果状态没有变化，则直接返回，不触发更新
     let update = true;
     try {
-        if (JSON.stringify(reducerState) === JSON.stringify(store[namespace])) {
+        if (JSON.stringify(reducerState) === JSON.stringify(oldState)) {
             update = false;
+            for (let key in reducerState) {
+                if (!Object.is(reducerState[key], oldState[key])) {
+                    update = true;
+                    break;
+                }
+            }
         }
     } catch (err) {}
 
@@ -255,7 +264,18 @@ connect.dispatch = function (action: Action) {
     store[namespace] = reducerState;
     //限制在当前namesapce命名空间下进行dispatch,避免执行很多不必要的程序
     for (const dispatchId in dispatchs[namespace]) {
-        dispatchs[namespace][dispatchId]({ type, reducerState });
+        try {
+            const mapStateToPropsFunc = stateToProps[namespace][dispatchId];
+            const finalProps = mapStateToPropsFunc(store);
+            const oldProps = mapStateToPropsFunc({ ...store, [namespace]: oldState });
+            //根据mapStateToProps结果，判定是否需要更新
+            if (JSON.stringify(finalProps) !== JSON.stringify(oldProps)) {
+                dispatchs[namespace][dispatchId]({ type, reducerState });
+            }
+        } catch (err) {
+            console.error('mapStateToProps比对失败，继续执行dispatch', err);
+            dispatchs[namespace][dispatchId]({ type, reducerState });
+        }
     }
 };
 
